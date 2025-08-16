@@ -16,6 +16,8 @@ running = True
 
 def load_schedule():
     global schedule
+    # 确保目录存在
+    os.makedirs("assets/scv", exist_ok=True)
     if not os.path.exists("assets/scv/schedule.csv"):
         # 默认文件
         with open("assets/scv/schedule.csv", "w", newline="", encoding="utf-8") as f:
@@ -28,6 +30,10 @@ def load_schedule():
             "提示",
             "已生成默认 schedule.csv，请修改后重启程序。"
         )
+
+        # 判断为初次使用，添加目录结构
+        os.makedirs("assets/sounds", exist_ok=True)
+
         print(f"⚠️ schedule.csv 不存在，已生成默认文件，请修改后重启程序。")
 
     schedule.clear()
@@ -46,8 +52,8 @@ def load_schedule():
 def play_sound(file):
     sound_path = os.path.join("assets", "sounds", file)
     if not os.path.exists(sound_path):
-        messagebox.showerror("错误", f"找不到音频文件: {sound_path}")
-        print(f"⚠️ 找不到音频文件: {sound_path}")
+        messagebox.showerror("错误", f"找不到音频文件: {file}\n请将音频文件放入 assets/sounds 目录下。")
+        print(f"⚠️ 找不到音频文件: {file}\n请将音频文件放入 assets/sounds 目录下。")
         return
     mixer.init()
     mixer.music.load(sound_path)
