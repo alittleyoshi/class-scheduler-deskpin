@@ -16,9 +16,9 @@ running = True
 
 def load_schedule():
     global schedule
-    if not os.path.exists("schedule.csv"):
+    if not os.path.exists("assets/scv/schedule.csv"):
         # 默认文件
-        with open("schedule.csv", "w", newline="", encoding="utf-8") as f:
+        with open("assets/scv/schedule.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["period", "type", "start", "end", "sound"])
             writer.writerow([1, "work", "08:00", "08:40", "class_start.mp3"])
@@ -31,7 +31,7 @@ def load_schedule():
         print(f"⚠️ schedule.csv 不存在，已生成默认文件，请修改后重启程序。")
 
     schedule.clear()
-    with open("schedule.csv", "r", encoding="utf-8") as f:
+    with open("assets/scv/schedule.csv", "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             schedule.append({
@@ -44,12 +44,13 @@ def load_schedule():
 
 
 def play_sound(file):
-    if not os.path.exists(file):
-        messagebox.showerror("错误", f"找不到音频文件: {file}")
-        print(f"⚠️ 找不到音频文件: {file}")
+    sound_path = os.path.join("assets", "sounds", file)
+    if not os.path.exists(sound_path):
+        messagebox.showerror("错误", f"找不到音频文件: {sound_path}")
+        print(f"⚠️ 找不到音频文件: {sound_path}")
         return
     mixer.init()
-    mixer.music.load(file)
+    mixer.music.load(sound_path)
     mixer.music.play()
 
 
