@@ -1,18 +1,22 @@
-import tkinter as tk
-import threading
-import time
 import csv
 import os
-from pygame import mixer
-import pystray
-from PIL import Image, ImageDraw
+import threading
+import time
+import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox
+
+import pystray
+from PIL import Image, ImageDraw
+from pygame import mixer
 
 schedule = []
 status = "等待开始"
 running = True
 CHECK_OVERLAP = True
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SCHEDULE_PATH = os.path.join(BASE_DIR, "schedule.csv")
+LEGACY_SCHEDULE_PATH = os.path.join(BASE_DIR, "assets", "scv", "schedule.csv")
 
 
 def parse_minutes(value):
@@ -20,31 +24,38 @@ def parse_minutes(value):
     return parsed_time.hour * 60 + parsed_time.minute
 
 
+def get_schedule_path():
+    if os.path.exists(SCHEDULE_PATH):
+        return SCHEDULE_PATH
+    if os.path.exists(LEGACY_SCHEDULE_PATH):
+        return LEGACY_SCHEDULE_PATH
+    return SCHEDULE_PATH
+
+
+def ensure_default_schedule(path):
+    if os.path.exists(path):
+        return
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["period", "type", "start", "end", "sound"])
+        writer.writerow([1, "work", "08:00", "08:40", "class_start.mp3"])
+        writer.writerow([2, "break", "08:40", "08:50", "class_end.mp3"])
+
+    messagebox.showwarning("提示", "已生成默认 schedule.csv，请修改后重启程序。")
+    print(f"⚠️ schedule.csv 不存在，已生成默认文件：{path}")
+
+
 def load_schedule():
     global schedule
-    # 确保目录存在
-    os.makedirs("assets/scv", exist_ok=True)
-    if not os.path.exists("assets/scv/schedule.csv"):
-        # 默认文件
-        with open("assets/scv/schedule.csv", "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["period", "type", "start", "end", "sound"])
-            writer.writerow([1, "work", "08:00", "08:40", "class_start.mp3"])
-            writer.writerow([2, "break", "08:40", "08:50", "class_end.mp3"])
-        # 弹窗提示
-        messagebox.showwarning(
-            "提示",
-            "已生成默认 schedule.csv，请修改后重启程序。"
-        )
 
-        # 判断为初次使用，添加目录结构
-        os.makedirs("assets/sounds", exist_ok=True)
-
-        print(f"⚠️ schedule.csv 不存在，已生成默认文件，请修改后重启程序。")
+    schedule_path = get_schedule_path()
+    ensure_default_schedule(schedule_path)
 
     schedule.clear()
     errors = []
-    with open("assets/scv/schedule.csv", "r", encoding="utf-8") as f:
+
+    with open(schedule_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             line_no = reader.line_num
@@ -80,16 +91,18 @@ def load_schedule():
                 errors.append(f"第 {line_no} 行配置错误：start 必须早于 end，当前值为 {start_raw}-{end_raw}")
                 continue
 
-            schedule.append({
-                "line": line_no,
-                "period": period,
-                "type": row["type"].strip(),
-                "start": start_raw,
-                "end": end_raw,
-                "start_minutes": start_minutes,
-                "end_minutes": end_minutes,
-                "sound": row["sound"].strip()
-            })
+            schedule.append(
+                {
+                    "line": line_no,
+                    "period": period,
+                    "type": row["type"].strip(),
+                    "start": start_raw,
+                    "end": end_raw,
+                    "start_minutes": start_minutes,
+                    "end_minutes": end_minutes,
+                    "sound": row["sound"].strip(),
+                }
+            )
 
     schedule.sort(key=lambda item: item["period"])
 
@@ -98,10 +111,14 @@ def load_schedule():
         for item in schedule:
             overlap_item = next(
                 (
-                    prev for prev in valid_schedule
-                    if not (item["start_minutes"] >= prev["end_minutes"] or item["end_minutes"] <= prev["start_minutes"])
+                    prev
+                    for prev in valid_schedule
+                    if not (
+                        item["start_minutes"] >= prev["end_minutes"]
+                        or item["end_minutes"] <= prev["start_minutes"]
+                    )
                 ),
-                None
+                None,
             )
             if overlap_item:
                 errors.append(
@@ -121,11 +138,25 @@ def load_schedule():
         print("⚠️ 未加载到有效课表，请检查 schedule.csv 配置。")
 
 
+def resolve_sound_path(file_name):
+    candidates = [
+        os.path.join(BASE_DIR, file_name),
+        os.path.join(BASE_DIR, "assets", "sounds", file_name),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def play_sound(file):
-    sound_path = os.path.join("assets", "sounds", file)
-    if not os.path.exists(sound_path):
-        messagebox.showerror("错误", f"找不到音频文件: {file}\n请将音频文件放入 assets/sounds 目录下。")
-        print(f"⚠️ 找不到音频文件: {file}\n请将音频文件放入 assets/sounds 目录下。")
+    sound_path = resolve_sound_path(file)
+    if not sound_path:
+        messagebox.showerror(
+            "错误",
+            f"找不到音频文件: {file}\n请将音频文件放在程序目录或 assets/sounds 目录下。",
+        )
+        print(f"⚠️ 找不到音频文件: {file}\n请将音频文件放在程序目录或 assets/sounds 目录下。")
         return
     mixer.init()
     mixer.music.load(sound_path)
@@ -139,20 +170,17 @@ def timer_loop():
         if running:
             now = datetime.now()
             now_minutes = now.hour * 60 + now.minute
-            in_period = False  # 是否在某一节课/休息里
+            in_period = False
 
             for item in schedule:
-                # 判断当前是否在某一时间段内
                 if item["start_minutes"] <= now_minutes < item["end_minutes"]:
                     in_period = True
                     status = item["type"]
 
-                # 到达开始时间触发铃声
                 if now_minutes == item["start_minutes"] and last_trigger != (item["period"], "start"):
                     play_sound(item["sound"])
                     last_trigger = (item["period"], "start")
 
-                # 到达结束时间触发铃声
                 if now_minutes == item["end_minutes"] and last_trigger != (item["period"], "end"):
                     play_sound(item["sound"])
                     last_trigger = (item["period"], "end")
@@ -160,7 +188,7 @@ def timer_loop():
             if not in_period:
                 status = "空闲中"
 
-        time.sleep(5)  # 每 5 秒检查一次
+        time.sleep(5)
 
 
 def update_ui():
@@ -171,16 +199,16 @@ def update_ui():
 def quit_app(icon, item):
     icon.stop()
     root.quit()
-    
+
+
 def reset_window(icon, item):
-        root.geometry("200x60+100+100")  # 重置到初始位置
+    root.geometry("200x60+100+100")
+
 
 def create_tray():
     image = Image.new("RGB", (64, 64), "blue")
     draw = ImageDraw.Draw(image)
     draw.rectangle([16, 16, 48, 48], fill="white")
-
-    
 
     menu = pystray.Menu(
         pystray.MenuItem("窗口位置重置", reset_window),
@@ -189,9 +217,11 @@ def create_tray():
     icon = pystray.Icon("bell", image, "上课铃", menu)
     threading.Thread(target=icon.run, daemon=True).start()
 
+
 def start_drag(event):
     root.x = event.x
     root.y = event.y
+
 
 def do_drag(event):
     x = root.winfo_x() - root.x + event.x
@@ -212,7 +242,6 @@ def main():
     root.bind("<ButtonPress-1>", start_drag)
     root.bind("<B1-Motion>", do_drag)
 
-    # 添加右键菜单，可以退出程序
     def show_menu(event):
         menu = tk.Menu(root, tearoff=0)
         menu.add_command(label="退出", command=root.quit)
