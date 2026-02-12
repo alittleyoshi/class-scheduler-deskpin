@@ -12,6 +12,12 @@ from tkinter import messagebox
 schedule = []
 status = "等待开始"
 running = True
+CHECK_OVERLAP = True
+
+
+def parse_minutes(value):
+    parsed_time = datetime.strptime(value, "%H:%M").time()
+    return parsed_time.hour * 60 + parsed_time.minute
 
 
 def load_schedule():
@@ -37,16 +43,82 @@ def load_schedule():
         print(f"⚠️ schedule.csv 不存在，已生成默认文件，请修改后重启程序。")
 
     schedule.clear()
+    errors = []
     with open("assets/scv/schedule.csv", "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            line_no = reader.line_num
+            required_fields = ["period", "type", "start", "end", "sound"]
+            missing_fields = [field for field in required_fields if not (row.get(field) or "").strip()]
+            if missing_fields:
+                errors.append(f"第 {line_no} 行配置错误：缺少必填字段 {', '.join(missing_fields)}")
+                continue
+
+            period_raw = row["period"].strip()
+            start_raw = row["start"].strip()
+            end_raw = row["end"].strip()
+
+            try:
+                period = int(period_raw)
+            except ValueError:
+                errors.append(f"第 {line_no} 行配置错误：period 必须是可排序数字，当前值为 '{period_raw}'")
+                continue
+
+            try:
+                start_minutes = parse_minutes(start_raw)
+            except ValueError:
+                errors.append(f"第 {line_no} 行配置错误：start 时间格式错误，必须为 HH:MM，当前值为 '{start_raw}'")
+                continue
+
+            try:
+                end_minutes = parse_minutes(end_raw)
+            except ValueError:
+                errors.append(f"第 {line_no} 行配置错误：end 时间格式错误，必须为 HH:MM，当前值为 '{end_raw}'")
+                continue
+
+            if start_minutes >= end_minutes:
+                errors.append(f"第 {line_no} 行配置错误：start 必须早于 end，当前值为 {start_raw}-{end_raw}")
+                continue
+
             schedule.append({
-                "period": row["period"],
-                "type": row["type"],
-                "start": row["start"],
-                "end": row["end"],
-                "sound": row["sound"]
+                "line": line_no,
+                "period": period,
+                "type": row["type"].strip(),
+                "start": start_raw,
+                "end": end_raw,
+                "start_minutes": start_minutes,
+                "end_minutes": end_minutes,
+                "sound": row["sound"].strip()
             })
+
+    schedule.sort(key=lambda item: item["period"])
+
+    if CHECK_OVERLAP:
+        valid_schedule = []
+        for item in schedule:
+            overlap_item = next(
+                (
+                    prev for prev in valid_schedule
+                    if not (item["start_minutes"] >= prev["end_minutes"] or item["end_minutes"] <= prev["start_minutes"])
+                ),
+                None
+            )
+            if overlap_item:
+                errors.append(
+                    f"第 {item['line']} 行配置错误：时间段与第 {overlap_item['line']} 行重叠 "
+                    f"({item['start']}-{item['end']} 与 {overlap_item['start']}-{overlap_item['end']})"
+                )
+                continue
+            valid_schedule.append(item)
+        schedule = valid_schedule
+
+    if errors:
+        error_text = "\n".join(errors)
+        print(error_text)
+        messagebox.showwarning("课表配置错误", error_text)
+
+    if not schedule:
+        print("⚠️ 未加载到有效课表，请检查 schedule.csv 配置。")
 
 
 def play_sound(file):
@@ -65,22 +137,23 @@ def timer_loop():
     last_trigger = None
     while True:
         if running:
-            now = datetime.now().strftime("%H:%M")
+            now = datetime.now()
+            now_minutes = now.hour * 60 + now.minute
             in_period = False  # 是否在某一节课/休息里
 
             for item in schedule:
                 # 判断当前是否在某一时间段内
-                if item["start"] <= now < item["end"]:
+                if item["start_minutes"] <= now_minutes < item["end_minutes"]:
                     in_period = True
                     status = item["type"]
 
                 # 到达开始时间触发铃声
-                if now == item["start"] and last_trigger != (item["period"], "start"):
+                if now_minutes == item["start_minutes"] and last_trigger != (item["period"], "start"):
                     play_sound(item["sound"])
                     last_trigger = (item["period"], "start")
 
                 # 到达结束时间触发铃声
-                if now == item["end"] and last_trigger != (item["period"], "end"):
+                if now_minutes == item["end_minutes"] and last_trigger != (item["period"], "end"):
                     play_sound(item["sound"])
                     last_trigger = (item["period"], "end")
 
@@ -143,7 +216,7 @@ def main():
     def show_menu(event):
         menu = tk.Menu(root, tearoff=0)
         menu.add_command(label="退出", command=root.quit)
-        menu.add_command(label="播放声音", command=lambda: play_sound(schedule[1]["sound"]))
+        menu.add_command(label="播放声音", command=lambda: play_sound(schedule[0]["sound"]) if schedule else None)
         menu.tk_popup(event.x_root, event.y_root)
 
     root.bind("<Button-3>", show_menu)
